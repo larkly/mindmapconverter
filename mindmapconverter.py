@@ -2,6 +2,7 @@ import re
 import xml.etree.ElementTree as ET
 import sys
 import os
+import argparse
 
 def parse_node(node, level):
     text = node.get("TEXT")
@@ -11,7 +12,12 @@ def parse_node(node, level):
     return plantuml_node
 
 def freemind_to_plantuml(file_path):
-    tree = ET.parse(file_path)
+    try:
+        tree = ET.parse(file_path)
+    except ET.ParseError as e:
+        print(f"Error parsing XML file: {e}")
+        sys.exit(1)
+
     root = tree.getroot()
     plantuml = "@startmindmap\n"
     for child in root.findall("node"):
@@ -47,23 +53,50 @@ def plantuml_to_freemind(plantuml_string):
         if level is not None and text:
             while len(node_stack) >= level:
                 node_stack.pop()
-            new_node = create_node(node_stack[-1] if node_stack else root, level, text)
+            parent_node = node_stack[-1] if node_stack else root
+            new_node = create_node(parent_node, level, text)
             node_stack.append(new_node)
 
     return ET.tostring(root, encoding="unicode", method="xml")
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python mindmapconverter.py <input_file>")
-    else:
-        input_file = sys.argv[1]
-        file_extension = os.path.splitext(input_file)[1]
+def main():
+    parser = argparse.ArgumentParser(description="Convert between Freemind and PlantUML mindmaps.")
+    parser.add_argument("input_file", help="Path to the input file.")
+    parser.add_argument("-o", "--output_file", help="Path to the output file. If not provided, output will be printed to stdout.")
+    args = parser.parse_args()
 
-        if file_extension == ".mm":
+    input_file = args.input_file
+    output_file = args.output_file
+    file_extension = os.path.splitext(input_file)[1]
+
+    if file_extension == ".mm":
+        try:
             plantuml_mindmap = freemind_to_plantuml(input_file)
-            print(plantuml_mindmap)
-        else:
+            if output_file:
+                with open(output_file, "w") as file:
+                    file.write(plantuml_mindmap)
+            else:
+                print(plantuml_mindmap)
+        except FileNotFoundError:
+            print(f"Error: Input file not found at '{input_file}'")
+            sys.exit(1)
+    else:
+        try:
             with open(input_file, "r") as file:
-                plantuml_mindmap = file.read()
-            freemind_xml = plantuml_to_freemind(plantuml_mindmap)
-            print(freemind_xml)
+                content = file.read()
+            if "@startmindmap" in content and "@endmindmap" in content:
+                freemind_xml = plantuml_to_freemind(content)
+                if output_file:
+                    with open(output_file, "w") as file:
+                        file.write(freemind_xml)
+                else:
+                    print(freemind_xml)
+            else:
+                print("Error: Input file is not a valid PlantUML mindmap.")
+                sys.exit(1)
+        except FileNotFoundError:
+            print(f"Error: Input file not found at '{input_file}'")
+            sys.exit(1)
+
+if __name__ == "__main__":
+    main()
