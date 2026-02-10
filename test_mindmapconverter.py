@@ -86,5 +86,57 @@ class TestMindMapConverter(unittest.TestCase):
          child = root_node.find("node")
          self.assertEqual(child.get("TEXT"), "Child 1")
 
+    def test_plantuml_multiline(self):
+        puml_content = """@startmindmap
+* Root
+** :Child line 1
+Child line 2;
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        self.assertIn("Child line 1", child.get("TEXT"))
+        self.assertIn("Child line 2", child.get("TEXT"))
+        self.assertIn("\n", child.get("TEXT"))
+
+    def test_freemind_multiline_to_plantuml(self):
+        xml_content = """<map version="freeplane 1.9.13">
+<node TEXT="Root">
+<node TEXT="Line 1&#10;Line 2"/>
+</node>
+</map>"""
+        puml_output = self.converter.freemind_to_plantuml(xml_content)
+        self.assertIn("** :Line 1", puml_output)
+        self.assertIn("Line 2;", puml_output)
+
+    def test_hyperlinks_plantuml_to_freemind(self):
+        puml_content = """@startmindmap
+* [[http://example.com Link]]
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        node = root.find("node")
+        self.assertEqual(node.get("TEXT"), "Link")
+        hook = node.find("hook")
+        self.assertIsNotNone(hook)
+        self.assertEqual(hook.get("URI"), "http://example.com")
+
+    def test_hyperlinks_freemind_to_plantuml(self):
+        xml_content = """<map version="freeplane 1.9.13">
+<node TEXT="Link">
+<hook URI="http://example.com"/>
+</node>
+</map>"""
+        puml_output = self.converter.freemind_to_plantuml(xml_content)
+        self.assertIn("* [[http://example.com Link]]", puml_output)
+
+    def test_robust_regex_extra_spaces(self):
+        puml_content = """@startmindmap
+  *   Root  
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        self.assertEqual(root.find("node").get("TEXT"), "Root")
+
 if __name__ == '__main__':
     unittest.main()
