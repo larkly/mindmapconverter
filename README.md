@@ -14,16 +14,24 @@ This project provides a Python script (`mindmapconverter.py`) to facilitate the 
 ### Prerequisites
 - Python 3.x
 
-### Steps
+### From PyPI
+```bash
+pip install mindmapconverter
+```
+
+### From Source
 1. Clone the repository:
    ```bash
    git clone https://github.com/your-username/mindmapconverter.git
    cd mindmapconverter
    ```
-2. (Optional) Create and activate a virtual environment:
+2. Install the package:
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   pip install .
+   ```
+   Or for development (editable mode):
+   ```bash
+   pip install -e .
    ```
 
 ## Usage
