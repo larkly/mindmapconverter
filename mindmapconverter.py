@@ -12,8 +12,32 @@ class MindMapConverter:
 
     def parse_xml_node(self, node: ET.Element, level: int) -> str:
         text = node.get("TEXT", "")
-        # PlantUML standard syntax: * Node Level 1, ** Node Level 2, etc.
-        plantuml_node = f"{'*' * level} {text}"
+        
+        # Check for hyperlinks
+        # Freeplane stores links in a hook element
+        link = None
+        for hook in node.findall("hook"):
+            if hook.get("URI"):
+                link = hook.get("URI")
+                break
+        
+        if link:
+            # PlantUML format: [[url label]]
+            # If text matches url, just [[url]]
+            if text == link:
+                text = f"[[{link}]]"
+            else:
+                text = f"[[{link} {text}]]"
+
+        # Check for multiline
+        if "\n" in text:
+            # PlantUML arithmetic/multiline syntax
+            # * :Line 1
+            # Line 2;
+            plantuml_node = f"{'*' * level} :{text};"
+        else:
+            plantuml_node = f"{'*' * level} {text}"
+            
         for child in node.findall("node"):
             plantuml_node += "\n" + self.parse_xml_node(child, level + 1)
         return plantuml_node
@@ -24,12 +48,8 @@ class MindMapConverter:
         except ET.ParseError as e:
             raise ValueError(f"Error parsing XML content: {e}")
 
-        # If the root is 'map', we iterate over its children 'node'
-        # The 'map' element itself isn't a visual node usually in these exports, 
-        # but the first child 'node' is the center.
         plantuml_lines = ["@startmindmap"]
         
-        # Handle the case where the root might be the map element or a node directly
         if root.tag == 'map':
             nodes = root.findall("node")
         elif root.tag == 'node':
@@ -43,29 +63,60 @@ class MindMapConverter:
         plantuml_lines.append("@endmindmap")
         return "\n".join(plantuml_lines)
 
-    def parse_plantuml_line(self, line: str) -> Optional[Tuple[int, str]]:
+    def parse_plantuml_line(self, line: str) -> Optional[Tuple[int, str, bool]]:
         # Matches lines like:
         # * Root
         # ** Child
         # *_ Root (Legacy support)
-        # **_ Child (Legacy support)
-        # Also handles indentation spaces if present
-        match = re.match(r"^\s*(\*+)(?:_)?\s+(.+)$", line)
+        # ** :Multiline start
+        # Returns (level, text, is_multiline_start)
+        
+        # Regex to capture level, optional underscore, and text
+        # We allow flexible whitespace
+        match = re.match(r"^\s*(\*+)(?:_)?\s*(.*)$", line)
         if match:
             level = len(match.group(1))
             text = match.group(2).strip()
-            return level, text
+            is_multiline_start = text.startswith(":")
+            if is_multiline_start:
+                text = text[1:].strip() # Remove leading :
+            return level, text, is_multiline_start
         return None
 
     def create_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
+        # Check for hyperlinks in text [[url label]] or [[url]]
+        # Regex for [[url label]] or [[url]]
+        # We process matches. 
+        # Note: If multiple links exist, Freeplane only supports one URI per node typically via hook, 
+        # or we could leave others in text. We'll support extracting the first one to URI attribute.
+        
+        link_match = re.search(r"\[\[(.*?)(?: (.*?))?\]\]", text)
+        uri = None
+        if link_match:
+            raw_url = link_match.group(1)
+            label = link_match.group(2)
+            
+            if label:
+                # Replace the whole [[...]] block with just the label
+                text = text.replace(link_match.group(0), label)
+                uri = raw_url
+            else:
+                # [[url]] -> Label is url
+                text = text.replace(link_match.group(0), raw_url)
+                uri = raw_url
+        
         node = ET.SubElement(parent, "node")
         node.set("TEXT", text)
         node.set("FOLDED", "false")
+        
+        if uri:
+            hook = ET.SubElement(node, "hook")
+            hook.set("URI", uri)
+            
         return node
 
     def plantuml_to_freemind(self, plantuml_string: str) -> str:
         lines = plantuml_string.strip().split("\n")
-        # Basic validation
         valid_start = any(line.strip().startswith("@startmindmap") for line in lines)
         valid_end = any(line.strip().startswith("@endmindmap") for line in lines)
         
@@ -77,55 +128,77 @@ class MindMapConverter:
         node_stack: List[ET.Element] = []
         
         first_node_found = False
-
-        for line in lines:
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
             stripped = line.strip()
+            
             if stripped.startswith("@startmindmap") or stripped.startswith("@endmindmap"):
+                i += 1
                 continue
             
-            # Skip empty lines or comments if any (simple handling)
             if not stripped or stripped.startswith("'"):
+                i += 1
                 continue
 
-            level_text = self.parse_plantuml_line(line)
-            if level_text:
-                level, text = level_text
+            parsed = self.parse_plantuml_line(line)
+            if parsed:
+                level, text, is_multiline_start = parsed
                 
+                if is_multiline_start:
+                    # Check if text ends with ;
+                    if text.endswith(";"):
+                        text = text[:-1]
+                    else:
+                        # Read subsequent lines
+                        multiline_text = [text]
+                        i += 1
+                        while i < len(lines):
+                            next_line = lines[i].strip()
+                            if next_line.endswith(";"):
+                                multiline_text.append(next_line[:-1])
+                                i += 1
+                                break
+                            else:
+                                multiline_text.append(lines[i].rstrip()) # Keep indentation? usually flat text
+                                i += 1
+                        text = "\n".join(multiline_text)
+                        # i is already incremented past the end
+                        # decremented below because we increment at start of loop/continue? 
+                        # actually we are controlling i manually now.
+                        # Wait, the main loop shouldn't inc i if we did it here.
+                        # Let's restructure loop to not auto-increment if handled.
+                        # Easier: just continue since we advanced i.
+                        pass
+                
+                # Logic to add node to stack
                 if not first_node_found:
-                    # The first node is the root node of the mindmap.
-                    # In Freemind, the first node under <map> is the central topic.
-                    # We accept whatever level parsing gives, but typically it should be level 1.
                     root_node = self.create_xml_node(root, text)
                     node_stack.append(root_node)
                     first_node_found = True
-                    # We reset the stack to just this root node, effectively ignoring 
-                    # whatever absolute level was provided for the root (normalizing it to base)
-                    # But if we want to respect hierarchy if multiple roots appear (forest), 
-                    # that's complex. Assuming single root for mindmaps.
-                    
-                    # Correction: node_stack needs to track depth. 
-                    # If the first node is `*`, it's level 1.
-                    # We put it at stack index 0 (logic level 1).
+                    # Only increment i if we didn't already
+                    if not is_multiline_start:
+                         i += 1
                     continue
 
-                # Adjust stack for current level
-                # If level is 2 (**), we want parent at stack index 0 (level 1).
-                # So we pop until stack has 'level - 1' items.
                 while len(node_stack) >= level:
                     node_stack.pop()
                 
                 if not node_stack:
-                    # This happens if we have a second root or disjoint tree, 
-                    # or level jumped weirdly (e.g. * then * again at top level).
-                    # We treat it as a sibling of the previous root? 
-                    # Freemind XML usually expects one main root node inside <map>.
-                    # We'll just append to map root to be safe, essentially creating multi-root.
                     new_node = self.create_xml_node(root, text)
                     node_stack.append(new_node)
                 else:
                     parent_node = node_stack[-1]
                     new_node = self.create_xml_node(parent_node, text)
                     node_stack.append(new_node)
+                
+                if not is_multiline_start:
+                     i += 1
+            else:
+                # Could be a continuation line if we missed it, but generally ignore unparsed
+                i += 1
+                continue
 
         return ET.tostring(root, encoding="unicode", method="xml")
 
