@@ -108,6 +108,7 @@ class MindMapConverter:
 
         if uri:
             hook = ET.SubElement(node, "hook")
+            hook.set("NAME", "ExternalObject")
             hook.set("URI", uri)
 
         return node
