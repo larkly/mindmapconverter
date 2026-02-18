@@ -15,7 +15,7 @@ class MindMapConverter:
     def parse_xml_node(self, node: ET.Element, level: int) -> str:
         """Recursively convert a Freemind XML node (and its children) to PlantUML lines."""
         text = node.get("TEXT", "")
-        
+
         # Check for hyperlinks
         # Freeplane stores links in a hook element
         link = None
@@ -23,7 +23,7 @@ class MindMapConverter:
             if hook.get("URI"):
                 link = hook.get("URI")
                 break
-        
+
         if link:
             # PlantUML format: [[url label]]
             # If text matches url, just [[url]]
@@ -40,7 +40,7 @@ class MindMapConverter:
             plantuml_node = f"{'*' * level} :{text};"
         else:
             plantuml_node = f"{'*' * level} {text}"
-            
+
         for child in node.findall("node"):
             plantuml_node += "\n" + self.parse_xml_node(child, level + 1)
         return plantuml_node
@@ -53,7 +53,7 @@ class MindMapConverter:
             raise ValueError(f"Error parsing XML content: {e}")
 
         plantuml_lines = ["@startmindmap"]
-        
+
         if root.tag == 'map':
             nodes = root.findall("node")
         elif root.tag == 'node':
@@ -63,7 +63,7 @@ class MindMapConverter:
 
         for child in nodes:
             plantuml_lines.append(self.parse_xml_node(child, 1))
-        
+
         plantuml_lines.append("@endmindmap")
         return "\n".join(plantuml_lines)
 
@@ -92,7 +92,7 @@ class MindMapConverter:
         if link_match:
             raw_url = link_match.group(1)
             label = link_match.group(2)
-            
+
             if label:
                 # Replace the whole [[...]] block with just the label
                 text = text.replace(link_match.group(0), label)
@@ -101,15 +101,15 @@ class MindMapConverter:
                 # [[url]] -> Label is url
                 text = text.replace(link_match.group(0), raw_url)
                 uri = raw_url
-        
+
         node = ET.SubElement(parent, "node")
         node.set("TEXT", text)
         node.set("FOLDED", "false")
-        
+
         if uri:
             hook = ET.SubElement(node, "hook")
             hook.set("URI", uri)
-            
+
         return node
 
     def plantuml_to_freemind(self, plantuml_string: str) -> str:
@@ -127,18 +127,14 @@ class MindMapConverter:
         root = ET.Element("map")
         root.set("version", self.xml_version)
         node_stack: List[ET.Element] = []
-        
+
         first_node_found = False
-        
-        i = 0
-        while i < len(lines):
+
+        i = start_idx + 1
+        while i < end_idx:
             line = lines[i]
             stripped = line.strip()
-            
-            if stripped.startswith("@startmindmap") or stripped.startswith("@endmindmap"):
-                i += 1
-                continue
-            
+
             if not stripped or stripped.startswith("'"):
                 i += 1
                 continue
@@ -156,7 +152,7 @@ class MindMapConverter:
                         # Multi-line form: read continuation lines until one ends with ;
                         multiline_text = [text]
                         i += 1
-                        while i < len(lines):
+                        while i < end_idx:
                             next_line = lines[i].strip()
                             if next_line.endswith(";"):
                                 multiline_text.append(next_line[:-1])
@@ -165,6 +161,10 @@ class MindMapConverter:
                             else:
                                 multiline_text.append(lines[i].rstrip())
                                 i += 1
+                        else:
+                            raise ValueError(
+                                "Unterminated multiline node: missing closing ';'."
+                            )
                         text = "\n".join(multiline_text)
                         # i is already positioned past the closing ; line
                         i_advanced = True
@@ -203,13 +203,13 @@ def main() -> None:
 
     input_path: str = args.input_file
     output_path: Optional[str] = args.output_file
-    
+
     converter = MindMapConverter()
 
     try:
         # Determine conversion direction
         _, ext = os.path.splitext(input_path)
-        
+
         with open(input_path, "r", encoding="utf-8") as f:
             content = f.read()
 

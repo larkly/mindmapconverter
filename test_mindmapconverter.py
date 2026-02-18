@@ -31,22 +31,22 @@ class TestMindMapConverter(unittest.TestCase):
 ** Child 2
 *** Grandchild
 @endmindmap"""
-        
+
         xml_output = self.converter.plantuml_to_freemind(puml_content)
         root = ET.fromstring(xml_output)
-        
+
         self.assertEqual(root.tag, 'map')
         # Check structure
         # map -> node(Root) -> [node(Child 1), node(Child 2) -> node(Grandchild)]
         root_node = root.find("node")
         self.assertIsNotNone(root_node)
         self.assertEqual(root_node.get("TEXT"), "Root")
-        
+
         children = root_node.findall("node")
         self.assertEqual(len(children), 2)
         self.assertEqual(children[0].get("TEXT"), "Child 1")
         self.assertEqual(children[1].get("TEXT"), "Child 2")
-        
+
         grandchild = children[1].find("node")
         self.assertIsNotNone(grandchild)
         self.assertEqual(grandchild.get("TEXT"), "Grandchild")
@@ -58,10 +58,10 @@ class TestMindMapConverter(unittest.TestCase):
 **_ Child 2
 ***_ Grandchild
 @endmindmap"""
-        
+
         xml_output = self.converter.plantuml_to_freemind(puml_content)
         root = ET.fromstring(xml_output)
-        
+
         root_node = root.find("node")
         self.assertEqual(root_node.get("TEXT"), "Root")
         children = root_node.findall("node")
@@ -215,6 +215,40 @@ Child line 2;
         root = ET.fromstring(xml_output)
         self.assertEqual(root.tag, "map")
         self.assertEqual(len(root.findall("node")), 0)
+
+    def test_content_before_startmindmap_is_ignored(self):
+        """Lines before @startmindmap must not produce nodes."""
+        puml_content = """* Intruder
+@startmindmap
+* Root
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        all_texts = [n.get("TEXT") for n in root.iter("node")]
+        self.assertNotIn("Intruder", all_texts)
+
+    def test_content_after_endmindmap_is_ignored(self):
+        """Lines after @endmindmap must not produce nodes."""
+        puml_content = """@startmindmap
+* Root
+@endmindmap
+* Trailer"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        all_texts = [n.get("TEXT") for n in root.iter("node")]
+        self.assertNotIn("Trailer", all_texts)
+
+    def test_unterminated_multiline_raises_value_error(self):
+        """A multiline node with no closing ';' must raise ValueError."""
+        puml_content = """@startmindmap
+* Root
+** :Line 1
+Line 2
+@endmindmap"""
+        with self.assertRaises(ValueError) as ctx:
+            self.converter.plantuml_to_freemind(puml_content)
+        self.assertIn("Unterminated", str(ctx.exception))
+
 
 if __name__ == '__main__':
     unittest.main()
