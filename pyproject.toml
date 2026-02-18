@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mindmapconverter"
-version = "0.1.0"
+version = "0.1.1"
 description = "A tool to convert between Freemind/Freeplane and PlantUML mindmaps."
 readme = "README.md"
 authors = [
