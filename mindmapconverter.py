@@ -7,12 +7,15 @@ import argparse
 from typing import Optional, Tuple, List, TextIO
 
 class MindMapConverter:
+    """Bidirectional converter between Freemind/Freeplane (.mm) and PlantUML mindmap (.puml) formats."""
+
     def __init__(self):
         self.xml_version = "freeplane 1.9.13"
 
     def parse_xml_node(self, node: ET.Element, level: int) -> str:
+        """Recursively convert a Freemind XML node (and its children) to PlantUML lines."""
         text = node.get("TEXT", "")
-        
+
         # Check for hyperlinks
         # Freeplane stores links in a hook element
         link = None
@@ -20,7 +23,7 @@ class MindMapConverter:
             if hook.get("URI"):
                 link = hook.get("URI")
                 break
-        
+
         if link:
             # PlantUML format: [[url label]]
             # If text matches url, just [[url]]
@@ -37,19 +40,20 @@ class MindMapConverter:
             plantuml_node = f"{'*' * level} :{text};"
         else:
             plantuml_node = f"{'*' * level} {text}"
-            
+
         for child in node.findall("node"):
             plantuml_node += "\n" + self.parse_xml_node(child, level + 1)
         return plantuml_node
 
     def freemind_to_plantuml(self, content: str) -> str:
+        """Convert Freemind/Freeplane XML content to a PlantUML mindmap string."""
         try:
             root = ET.fromstring(content)
         except ET.ParseError as e:
             raise ValueError(f"Error parsing XML content: {e}")
 
         plantuml_lines = ["@startmindmap"]
-        
+
         if root.tag == 'map':
             nodes = root.findall("node")
         elif root.tag == 'node':
@@ -59,20 +63,16 @@ class MindMapConverter:
 
         for child in nodes:
             plantuml_lines.append(self.parse_xml_node(child, 1))
-        
+
         plantuml_lines.append("@endmindmap")
         return "\n".join(plantuml_lines)
 
     def parse_plantuml_line(self, line: str) -> Optional[Tuple[int, str, bool]]:
-        # Matches lines like:
-        # * Root
-        # ** Child
-        # *_ Root (Legacy support)
-        # ** :Multiline start
-        # Returns (level, text, is_multiline_start)
-        
-        # Regex to capture level, optional underscore, and text
-        # We allow flexible whitespace
+        """Parse a single PlantUML node line.
+
+        Handles `* text`, `** text`, `*_ text` (legacy), and `:multiline start` forms.
+        Returns (level, text, is_multiline_start) or None if the line is not a node.
+        """
         match = re.match(r"^\s*(\*+)(?:_)?\s*(.*)$", line)
         if match:
             level = len(match.group(1))
@@ -84,18 +84,19 @@ class MindMapConverter:
         return None
 
     def create_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
+        """Create a Freemind XML node under parent, extracting any [[url label]] hyperlink."""
         # Check for hyperlinks in text [[url label]] or [[url]]
         # Regex for [[url label]] or [[url]]
-        # We process matches. 
-        # Note: If multiple links exist, Freeplane only supports one URI per node typically via hook, 
+        # We process matches.
+        # Note: If multiple links exist, Freeplane only supports one URI per node typically via hook,
         # or we could leave others in text. We'll support extracting the first one to URI attribute.
-        
+
         link_match = re.search(r"\[\[(.*?)(?: (.*?))?\]\]", text)
         uri = None
         if link_match:
             raw_url = link_match.group(1)
             label = link_match.group(2)
-            
+
             if label:
                 # Replace the whole [[...]] block with just the label
                 text = text.replace(link_match.group(0), label)
@@ -104,40 +105,40 @@ class MindMapConverter:
                 # [[url]] -> Label is url
                 text = text.replace(link_match.group(0), raw_url)
                 uri = raw_url
-        
+
         node = ET.SubElement(parent, "node")
         node.set("TEXT", text)
         node.set("FOLDED", "false")
-        
+
         if uri:
             hook = ET.SubElement(node, "hook")
             hook.set("URI", uri)
-            
+
         return node
 
     def plantuml_to_freemind(self, plantuml_string: str) -> str:
+        """Convert a PlantUML mindmap string to Freemind/Freeplane XML."""
         lines = plantuml_string.strip().split("\n")
-        valid_start = any(line.strip().startswith("@startmindmap") for line in lines)
-        valid_end = any(line.strip().startswith("@endmindmap") for line in lines)
-        
-        if not (valid_start and valid_end):
-             raise ValueError("Input is not a valid PlantUML mindmap (missing @startmindmap or @endmindmap).")
+        stripped_lines = [line.strip() for line in lines]
+        try:
+            start_idx = next(i for i, l in enumerate(stripped_lines) if l.startswith("@startmindmap"))
+            end_idx = next(i for i, l in enumerate(stripped_lines) if l.startswith("@endmindmap"))
+        except StopIteration:
+            raise ValueError("Input is not a valid PlantUML mindmap (missing @startmindmap or @endmindmap).")
+        if end_idx <= start_idx:
+            raise ValueError("Input is not a valid PlantUML mindmap (@endmindmap must come after @startmindmap).")
 
         root = ET.Element("map")
         root.set("version", self.xml_version)
         node_stack: List[ET.Element] = []
-        
+
         first_node_found = False
-        
-        i = 0
-        while i < len(lines):
+
+        i = start_idx + 1
+        while i < end_idx:
             line = lines[i]
             stripped = line.strip()
-            
-            if stripped.startswith("@startmindmap") or stripped.startswith("@endmindmap"):
-                i += 1
-                continue
-            
+
             if not stripped or stripped.startswith("'"):
                 i += 1
                 continue
@@ -145,46 +146,44 @@ class MindMapConverter:
             parsed = self.parse_plantuml_line(line)
             if parsed:
                 level, text, is_multiline_start = parsed
-                
+                i_advanced = False
+
                 if is_multiline_start:
-                    # Check if text ends with ;
                     if text.endswith(";"):
+                        # Single-line form: `:text;` — strip the semicolon
                         text = text[:-1]
                     else:
-                        # Read subsequent lines
+                        # Multi-line form: read continuation lines until one ends with ;
                         multiline_text = [text]
                         i += 1
-                        while i < len(lines):
+                        while i < end_idx:
                             next_line = lines[i].strip()
                             if next_line.endswith(";"):
                                 multiline_text.append(next_line[:-1])
                                 i += 1
                                 break
                             else:
-                                multiline_text.append(lines[i].rstrip()) # Keep indentation? usually flat text
+                                multiline_text.append(lines[i].rstrip())
                                 i += 1
+                        else:
+                            raise ValueError(
+                                "Unterminated multiline node: missing closing ';'."
+                            )
                         text = "\n".join(multiline_text)
-                        # i is already incremented past the end
-                        # decremented below because we increment at start of loop/continue? 
-                        # actually we are controlling i manually now.
-                        # Wait, the main loop shouldn't inc i if we did it here.
-                        # Let's restructure loop to not auto-increment if handled.
-                        # Easier: just continue since we advanced i.
-                        pass
-                
-                # Logic to add node to stack
+                        # i is already positioned past the closing ; line
+                        i_advanced = True
+
                 if not first_node_found:
                     root_node = self.create_xml_node(root, text)
                     node_stack.append(root_node)
                     first_node_found = True
-                    # Only increment i if we didn't already
-                    if not is_multiline_start:
-                         i += 1
+                    if not i_advanced:
+                        i += 1
                     continue
 
                 while len(node_stack) >= level:
                     node_stack.pop()
-                
+
                 if not node_stack:
                     new_node = self.create_xml_node(root, text)
                     node_stack.append(new_node)
@@ -192,13 +191,11 @@ class MindMapConverter:
                     parent_node = node_stack[-1]
                     new_node = self.create_xml_node(parent_node, text)
                     node_stack.append(new_node)
-                
-                if not is_multiline_start:
-                     i += 1
+
+                if not i_advanced:
+                    i += 1
             else:
-                # Could be a continuation line if we missed it, but generally ignore unparsed
                 i += 1
-                continue
 
         return ET.tostring(root, encoding="unicode", method="xml")
 
@@ -210,13 +207,13 @@ def main() -> None:
 
     input_path: str = args.input_file
     output_path: Optional[str] = args.output_file
-    
+
     converter = MindMapConverter()
 
     try:
         # Determine conversion direction
         _, ext = os.path.splitext(input_path)
-        
+
         with open(input_path, "r", encoding="utf-8") as f:
             content = f.read()
 
