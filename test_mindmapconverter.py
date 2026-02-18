@@ -249,6 +249,19 @@ Line 2
             self.converter.plantuml_to_freemind(puml_content)
         self.assertIn("Unterminated", str(ctx.exception))
 
+    def test_multiline_continuation_leading_whitespace_stripped(self):
+        """Leading whitespace on multiline continuation lines must be stripped."""
+        puml_content = """@startmindmap
+* Root
+** :Line 1
+    indented continuation;
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        self.assertIn("Line 1", child.get("TEXT"))
+        self.assertIn("indented continuation", child.get("TEXT"))
+        self.assertNotIn("    indented", child.get("TEXT"))
 
 if __name__ == '__main__':
     unittest.main()
