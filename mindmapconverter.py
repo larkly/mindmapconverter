@@ -159,7 +159,7 @@ class MindMapConverter:
                                 i += 1
                                 break
                             else:
-                                multiline_text.append(lines[i].rstrip())
+                                multiline_text.append(lines[i].strip())
                                 i += 1
                         else:
                             raise ValueError(
