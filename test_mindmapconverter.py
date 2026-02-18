@@ -74,17 +74,17 @@ class TestMindMapConverter(unittest.TestCase):
             self.converter.plantuml_to_freemind(puml_content)
 
     def test_plantuml_with_comments_and_spaces(self):
-         puml_content = """@startmindmap
+        puml_content = """@startmindmap
 ' This is a comment
   * Root
     ** Child 1
 @endmindmap"""
-         xml_output = self.converter.plantuml_to_freemind(puml_content)
-         root = ET.fromstring(xml_output)
-         root_node = root.find("node")
-         self.assertEqual(root_node.get("TEXT"), "Root")
-         child = root_node.find("node")
-         self.assertEqual(child.get("TEXT"), "Child 1")
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        root_node = root.find("node")
+        self.assertEqual(root_node.get("TEXT"), "Root")
+        child = root_node.find("node")
+        self.assertEqual(child.get("TEXT"), "Child 1")
 
     def test_plantuml_multiline(self):
         puml_content = """@startmindmap
@@ -132,11 +132,54 @@ Child line 2;
 
     def test_robust_regex_extra_spaces(self):
         puml_content = """@startmindmap
-  *   Root  
+  *   Root
 @endmindmap"""
         xml_output = self.converter.plantuml_to_freemind(puml_content)
         root = ET.fromstring(xml_output)
         self.assertEqual(root.find("node").get("TEXT"), "Root")
+
+    def test_single_line_multiline_node(self):
+        """Single-line multiline syntax `:text;` must not loop and must strip the semicolon."""
+        puml_content = """@startmindmap
+* Root
+** :Single line;
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.get("TEXT"), "Single line")
+
+    def test_reversed_markers_invalid(self):
+        """@endmindmap appearing before @startmindmap must raise ValueError."""
+        puml_content = """@endmindmap
+* Root
+@startmindmap"""
+        with self.assertRaises(ValueError):
+            self.converter.plantuml_to_freemind(puml_content)
+
+    def test_skipped_hierarchy_levels(self):
+        """Jumping from level 1 directly to level 3 should attach the deep node under root."""
+        puml_content = """@startmindmap
+* Root
+*** Deep
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        root_node = root.find("node")
+        self.assertEqual(root_node.get("TEXT"), "Root")
+        # Deep node should exist somewhere in the tree
+        all_nodes = root_node.iter("node")
+        texts = [n.get("TEXT") for n in all_nodes]
+        self.assertIn("Deep", texts)
+
+    def test_xml_special_characters_roundtrip(self):
+        """Node text containing XML special characters should survive a roundtrip."""
+        xml_content = """<map version="freeplane 1.9.13">
+<node TEXT="A &amp; B &lt;tag&gt;"/>
+</map>"""
+        puml_output = self.converter.freemind_to_plantuml(xml_content)
+        self.assertIn("A & B <tag>", puml_output)
 
 if __name__ == '__main__':
     unittest.main()
