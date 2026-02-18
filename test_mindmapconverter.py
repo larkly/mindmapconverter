@@ -119,6 +119,7 @@ Child line 2;
         self.assertEqual(node.get("TEXT"), "Link")
         hook = node.find("hook")
         self.assertIsNotNone(hook)
+        self.assertEqual(hook.get("NAME"), "ExternalObject")
         self.assertEqual(hook.get("URI"), "http://example.com")
 
     def test_hyperlinks_freemind_to_plantuml(self):
