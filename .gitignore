@@ -5,3 +5,5 @@ __pycache__/
 .venv
 .idea
 .vscode
+dist/
+build/
