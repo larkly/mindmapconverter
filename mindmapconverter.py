@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 import sys
 import os
 import argparse
-from typing import Optional, Tuple, List, TextIO
+from typing import Optional, Tuple, List
 
 class MindMapConverter:
     def __init__(self):
@@ -84,12 +84,8 @@ class MindMapConverter:
         return None
 
     def create_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
-        # Check for hyperlinks in text [[url label]] or [[url]]
-        # Regex for [[url label]] or [[url]]
-        # We process matches. 
-        # Note: If multiple links exist, Freeplane only supports one URI per node typically via hook, 
-        # or we could leave others in text. We'll support extracting the first one to URI attribute.
-        
+        # Extract the first [[url label]] or [[url]] hyperlink; only one URI per node is supported.
+
         link_match = re.search(r"\[\[(.*?)(?: (.*?))?\]\]", text)
         uri = None
         if link_match:

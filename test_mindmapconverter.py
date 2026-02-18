@@ -138,5 +138,40 @@ Child line 2;
         root = ET.fromstring(xml_output)
         self.assertEqual(root.find("node").get("TEXT"), "Root")
 
+    def _extract_tree(self, element: ET.Element):
+        """Recursively extract (TEXT, [children]) from an XML node element."""
+        return (element.get("TEXT"), [self._extract_tree(c) for c in element.findall("node")])
+
+    def test_roundtrip_mm_to_puml_to_mm(self):
+        """A 3-level Freemind map survives a .mm → .puml → .mm roundtrip with identical structure."""
+        original_xml = """<map version="freeplane 1.9.13">
+<node TEXT="Root">
+<node TEXT="Child 1"/>
+<node TEXT="Child 2">
+<node TEXT="Grandchild"/>
+</node>
+</node>
+</map>"""
+        puml = self.converter.freemind_to_plantuml(original_xml)
+        roundtripped_xml = self.converter.plantuml_to_freemind(puml)
+
+        original_root = ET.fromstring(original_xml).find("node")
+        roundtripped_root = ET.fromstring(roundtripped_xml).find("node")
+        self.assertEqual(self._extract_tree(original_root), self._extract_tree(roundtripped_root))
+
+    def test_empty_map_to_plantuml(self):
+        """An empty Freemind map produces exactly @startmindmap\\n@endmindmap."""
+        xml_content = '<map version="freeplane 1.9.13" />'
+        result = self.converter.freemind_to_plantuml(xml_content)
+        self.assertEqual(result.strip(), "@startmindmap\n@endmindmap")
+
+    def test_empty_plantuml_to_map(self):
+        """An empty PlantUML mindmap produces a <map> with zero child nodes."""
+        puml_content = "@startmindmap\n@endmindmap"
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        self.assertEqual(root.tag, "map")
+        self.assertEqual(len(root.findall("node")), 0)
+
 if __name__ == '__main__':
     unittest.main()
