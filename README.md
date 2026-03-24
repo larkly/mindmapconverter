@@ -22,7 +22,7 @@ pip install mindmapconverter
 ### From Source
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/mindmapconverter.git
+   git clone https://github.com/larkly/mindmapconverter.git
    cd mindmapconverter
    ```
 2. Install the package:
