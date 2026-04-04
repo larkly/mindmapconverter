@@ -7,7 +7,7 @@ import argparse
 from typing import Optional, Tuple, List
 
 class MindMapConverter:
-    """Bidirectional converter between Freemind/Freeplane (.mm) and PlantUML mindmap (.puml) formats."""
+    """Bidirectional converter between Freemind/Freeplane (.mm), PlantUML (.puml), and Markdown (.md) formats."""
 
     def __init__(self):
         self.xml_version = "freeplane 1.9.13"
@@ -66,6 +66,75 @@ class MindMapConverter:
 
         plantuml_lines.append("@endmindmap")
         return "\n".join(plantuml_lines)
+
+    def _xml_node_to_markdown(self, node: ET.Element, depth: int, lines: List[str]) -> None:
+        """Recursively convert a Freemind XML node to Markdown lines.
+
+        Args:
+            node: The XML element to convert.
+            depth: Current depth (0 = root/H1, 1+ = list items).
+            lines: List to append generated lines to.
+        """
+        text = node.get("TEXT", "")
+
+        # Check for hyperlinks
+        link = None
+        for hook in node.findall("hook"):
+            if hook.get("URI"):
+                link = hook.get("URI")
+                break
+
+        if link:
+            display_text = f"[{text}]({link})"
+        else:
+            display_text = text
+
+        # Handle multiline text: replace newlines with <br> for markdown
+        if "\n" in display_text:
+            display_text = display_text.replace("\n", "<br>")
+
+        if depth == 0:
+            lines.append(f"# {display_text}")
+        else:
+            indent = "  " * (depth - 1)
+            lines.append(f"{indent}- {display_text}")
+
+        for child in node.findall("node"):
+            self._xml_node_to_markdown(child, depth + 1, lines)
+
+    def freemind_to_markdown(self, content: str) -> str:
+        """Convert Freemind/Freeplane XML content to a Markdown nested list string.
+
+        The root node becomes an H1 header. Child nodes become nested list items
+        using ``-`` markers with 2-space indentation. Hyperlinks are rendered as
+        ``[text](url)``. Multiline node text uses ``<br>`` tags.
+
+        Args:
+            content: Freemind/Freeplane XML string.
+
+        Returns:
+            Markdown string with H1 header and nested lists.
+        """
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError as e:
+            raise ValueError(f"Error parsing XML content: {e}")
+
+        if root.tag == 'map':
+            nodes = root.findall("node")
+        elif root.tag == 'node':
+            nodes = [root]
+        else:
+            nodes = []
+
+        if not nodes:
+            return ""
+
+        lines: List[str] = []
+        for node in nodes:
+            self._xml_node_to_markdown(node, 0, lines)
+
+        return "\n".join(lines)
 
     def parse_plantuml_line(self, line: str) -> Optional[Tuple[int, str, bool]]:
         """Parse a single PlantUML node line.
@@ -196,10 +265,106 @@ class MindMapConverter:
 
         return ET.tostring(root, encoding="unicode", method="xml")
 
+    def _create_md_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
+        """Create a Freemind XML node from Markdown text, extracting ``[text](url)`` links.
+
+        Args:
+            parent: Parent XML element.
+            text: Markdown text (may contain a ``[label](url)`` link).
+
+        Returns:
+            The newly created XML ``<node>`` element.
+        """
+        uri = None
+
+        # Extract markdown link [text](url)
+        link_match = re.search(r"\[([^\]]+)\]\(([^)]+)\)", text)
+        if link_match:
+            label = link_match.group(1)
+            url = link_match.group(2)
+            text = text[:link_match.start()] + label + text[link_match.end():]
+            uri = url
+
+        # Convert <br> back to newlines
+        text = text.replace("<br>", "\n")
+
+        node = ET.SubElement(parent, "node")
+        node.set("TEXT", text)
+        node.set("FOLDED", "false")
+
+        if uri:
+            hook = ET.SubElement(node, "hook")
+            hook.set("NAME", "ExternalObject")
+            hook.set("URI", uri)
+
+        return node
+
+    def markdown_to_freemind(self, content: str) -> str:
+        """Convert a Markdown nested list string to Freemind/Freeplane XML.
+
+        The first ``# H1`` header becomes the root node. Nested list items
+        (``-``, ``*``, ``+``) become child nodes. Indentation determines depth
+        (any consistent indentation works). ``[text](url)`` links are converted
+        to Freemind hook elements. ``<br>`` tags in text are converted to newlines.
+
+        Args:
+            content: Markdown string with an H1 header and nested lists.
+
+        Returns:
+            Freemind XML string.
+
+        Raises:
+            ValueError: If no H1 header is found in the content.
+        """
+        lines = content.split("\n")
+
+        root = ET.Element("map")
+        root.set("version", self.xml_version)
+
+        # Stack of (indent_level, ET.Element) for tracking hierarchy.
+        # The root node uses indent_level -1 so all list items are its children.
+        node_stack: List[Tuple[int, ET.Element]] = []
+        root_found = False
+
+        for line in lines:
+            if not line.strip():
+                continue
+
+            # Check for H1 header (root node)
+            if not root_found:
+                h1_match = re.match(r"^#\s+(.+)$", line.strip())
+                if h1_match:
+                    text = h1_match.group(1).strip()
+                    root_node = self._create_md_xml_node(root, text)
+                    node_stack = [(-1, root_node)]
+                    root_found = True
+                    continue
+
+            # Check for list item (-, *, or + markers)
+            list_match = re.match(r"^(\s*)([-*+])\s+(.+)$", line)
+            if list_match and root_found:
+                indent = len(list_match.group(1))
+                text = list_match.group(3).strip()
+
+                # Pop stack until we find a parent with a strictly lower indent
+                while len(node_stack) > 1 and node_stack[-1][0] >= indent:
+                    node_stack.pop()
+
+                parent = node_stack[-1][1]
+                new_node = self._create_md_xml_node(parent, text)
+                node_stack.append((indent, new_node))
+
+        if not root_found:
+            raise ValueError("No H1 header found in Markdown content for root node.")
+
+        return ET.tostring(root, encoding="unicode", method="xml")
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert between Freemind and PlantUML mindmaps.")
+    parser = argparse.ArgumentParser(description="Convert between Freemind, PlantUML, and Markdown mindmaps.")
     parser.add_argument("input_file", help="Path to the input file.")
     parser.add_argument("-o", "--output_file", help="Path to the output file. If not provided, output will be printed to stdout.")
+    parser.add_argument("--to-md", action="store_true", help="Force output to Markdown format (input must be .mm).")
+    parser.add_argument("--from-md", action="store_true", help="Force input from Markdown format (output will be .mm XML).")
     args = parser.parse_args()
 
     input_path: str = args.input_file
@@ -208,16 +373,19 @@ def main() -> None:
     converter = MindMapConverter()
 
     try:
-        # Determine conversion direction
         _, ext = os.path.splitext(input_path)
+        out_ext = os.path.splitext(output_path)[1].lower() if output_path else ""
 
         with open(input_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        if ext.lower() == ".mm":
+        if args.from_md or ext.lower() == ".md":
+            output_content = converter.markdown_to_freemind(content)
+        elif args.to_md or (ext.lower() == ".mm" and out_ext == ".md"):
+            output_content = converter.freemind_to_markdown(content)
+        elif ext.lower() == ".mm":
             output_content = converter.freemind_to_plantuml(content)
         else:
-            # Assume PlantUML if not .mm, or explicit .puml/.plantuml
             output_content = converter.plantuml_to_freemind(content)
 
         if output_path:

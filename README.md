@@ -1,13 +1,16 @@
 # Mind Map Converter
 
 ## Overview
-This project provides a Python script (`mindmapconverter.py`) to facilitate the conversion between Freeplane/Freemind XML mind map files (`.mm`) and PlantUML mind map definitions (`.puml`). This enables users to leverage Freeplane/Freemind for visual mind map creation and then convert these maps into a PlantUML format suitable for embedding in documentation, especially in environments that support PlantUML rendering (e.g., GitLab, Confluence, Markdown viewers with Kroki integration).
+This project provides a Python script (`mindmapconverter.py`) to facilitate the conversion between Freeplane/Freemind XML mind map files (`.mm`), PlantUML mind map definitions (`.puml`), and Markdown nested lists (`.md`). This enables users to leverage Freeplane/Freemind for visual mind map creation and then convert these maps into formats suitable for embedding in documentation, especially in environments that support PlantUML rendering (e.g., GitLab, Confluence, Markdown viewers with Kroki integration) or plain Markdown workflows.
 
 ## Features
 - Convert Freeplane/Freemind (`.mm`) to PlantUML (`.puml`).
 - Convert PlantUML (`.puml`) to Freeplane/Freemind (`.mm`).
+- Convert Freeplane/Freemind (`.mm`) to Markdown nested lists (`.md`).
+- Convert Markdown nested lists (`.md`) to Freeplane/Freemind (`.mm`).
 - Supports both standard PlantUML syntax (`* Node`) and legacy underscore syntax (`*_ Node`).
-- Command-line interface with proper argument parsing.
+- Hyperlink support across all formats.
+- Command-line interface with proper argument parsing and auto-detection.
 
 ## Installation
 
@@ -36,12 +39,12 @@ pip install mindmapconverter
 
 ## Usage
 
-The script automatically detects the conversion direction based on the input file's extension.
+The script automatically detects the conversion direction based on the input file's extension. You can also use explicit flags to control the conversion.
 
 ### Command Line Interface
 
 ```bash
-python mindmapconverter.py input_file [-o output_file]
+python mindmapconverter.py input_file [-o output_file] [--to-md] [--from-md]
 ```
 
 ### Converting Freeplane/Freemind to PlantUML
@@ -73,6 +76,55 @@ python mindmapconverter.py input_file.puml -o output_file.mm
 **Example:**
 ```bash
 python mindmapconverter.py my_mindmap.puml -o my_mindmap.mm
+```
+
+### Converting Freeplane/Freemind to Markdown
+
+To convert a `.mm` file to a Markdown nested list:
+
+```bash
+python mindmapconverter.py input_file.mm --to-md -o output_file.md
+```
+
+Auto-detected when the output file has a `.md` extension:
+```bash
+python mindmapconverter.py my_mindmap.mm -o my_mindmap.md
+```
+
+### Converting Markdown to Freeplane/Freemind
+
+To convert a Markdown file to Freemind XML:
+
+```bash
+python mindmapconverter.py input_file.md -o output_file.mm
+```
+
+The `.md` extension is auto-detected, or you can use `--from-md` explicitly:
+```bash
+python mindmapconverter.py notes.md --from-md -o notes.mm
+```
+
+### Markdown Format Specification
+
+The Markdown mindmap format uses the following conventions:
+
+- **Root node**: The first `# H1` header becomes the root of the mindmap.
+- **Child nodes**: Nested unordered list items (`-`, `*`, or `+` markers) represent child nodes.
+- **Hierarchy**: Indentation (2 spaces per level) determines the depth of each node.
+- **Links**: `[text](url)` Markdown links are converted to Freemind hyperlinks (hook elements).
+- **Multiline text**: `<br>` tags in list items are converted to newlines in node text.
+
+**Example Markdown:**
+```markdown
+# Project Plan
+- Phase 1
+  - Design
+  - Prototype
+- Phase 2
+  - [Documentation](http://docs.example.com)
+  - Testing
+    - Unit Tests
+    - Integration Tests
 ```
 
 ### Supported Syntax
