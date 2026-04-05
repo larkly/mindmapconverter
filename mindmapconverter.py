@@ -17,7 +17,6 @@ class MindMapConverter:
         text = node.get("TEXT", "")
 
         # Check for hyperlinks
-        # Freeplane stores links in a hook element
         link = None
         for hook in node.findall("hook"):
             if hook.get("URI"):
@@ -26,7 +25,6 @@ class MindMapConverter:
 
         if link:
             # PlantUML format: [[url label]]
-            # If text matches url, just [[url]]
             if text == link:
                 text = f"[[{link}]]"
             else:
@@ -35,8 +33,6 @@ class MindMapConverter:
         # Check for multiline
         if "\n" in text:
             # PlantUML arithmetic/multiline syntax
-            # * :Line 1
-            # Line 2;
             plantuml_node = f"{'*' * level} :{text};"
         else:
             plantuml_node = f"{'*' * level} {text}"
@@ -79,14 +75,12 @@ class MindMapConverter:
             text = match.group(2).strip()
             is_multiline_start = text.startswith(":")
             if is_multiline_start:
-                text = text[1:].strip() # Remove leading :
+                text = text[1:].strip()  # Remove leading :
             return level, text, is_multiline_start
         return None
 
     def create_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
         """Create a Freemind XML node under parent, extracting any [[url label]] hyperlink."""
-        # Extract the first [[url label]] or [[url]] hyperlink; only one URI per node is supported.
-
         link_match = re.search(r"\[\[(.*?)(?: (.*?))?\]\]", text)
         uri = None
         if link_match:
@@ -94,11 +88,9 @@ class MindMapConverter:
             label = link_match.group(2)
 
             if label:
-                # Replace the whole [[...]] block with just the label
                 text = text.replace(link_match.group(0), label)
                 uri = raw_url
             else:
-                # [[url]] -> Label is url
                 text = text.replace(link_match.group(0), raw_url)
                 uri = raw_url
 
@@ -113,121 +105,170 @@ class MindMapConverter:
 
         return node
 
+    def _extract_content(self, lines: List[str]) -> Tuple[List[str], str]:
+        """Extract content between @startmindmap and @endmindmap markers.
+
+        Returns
+        -------
+        tuple[list[str], str]
+            The content lines and any title text found on the @startmindmap line.
+        """
+        stripped_lines = [line.strip() for line in lines]
+
+        try:
+            start_idx = next(
+                i for i, l in enumerate(stripped_lines) if l.startswith("@startmindmap")
+            )
+            end_idx = next(
+                i for i, l in enumerate(stripped_lines) if l.startswith("@endmindmap")
+            )
+        except StopIteration:
+            raise ValueError(
+                "Input is not a valid PlantUML mindmap "
+                "(missing @startmindmap or @endmindmap)."
+            )
+
+        if end_idx <= start_idx:
+            raise ValueError(
+                "Input is not a valid PlantUML mindmap "
+                "(@endmindmap must come after @startmindmap)."
+            )
+
+        # Extract title: anything after "@startmindmap" on the opening line
+        title_text = ""
+        start_line = stripped_lines[start_idx]
+        after_marker = start_line[len("@startmindmap"):].strip()
+        if after_marker:
+            title_text = after_marker
+
+        return lines[start_idx + 1: end_idx], title_text
+
+    def _collect_multiline(self, text: str, source_lines: List[str],
+                           start_pos: int, end_marker: int) -> str:
+        """Collect continuation lines for a multiline node.
+
+        Parameters
+        ----------
+        text : str
+            Initial text after the leading colon.
+        source_lines : list[str]
+            All lines from the original input (indexed identically to *lines* in
+            ``plantuml_to_freemind``).
+        start_pos : int
+            Index of the line that started the multiline block.
+        end_marker : int
+            Index of the ``@endmindmap`` line (exclusive upper bound).
+
+        Returns
+        -------
+        str
+            The fully assembled multiline text (without the trailing semicolon).
+        """
+        if text.endswith(";"):
+            return text[:-1], start_pos + 1
+
+        parts = [text]
+        i = start_pos + 1
+        while i < end_marker:
+            next_stripped = source_lines[i].strip()
+            if next_stripped.endswith(";"):
+                parts.append(next_stripped[:-1])
+                return "\n".join(parts), i + 1
+            parts.append(next_stripped)
+            i += 1
+
+        raise ValueError("Unterminated multiline node: missing closing ';'.")
+
     def plantuml_to_freemind(self, plantuml_string: str) -> str:
         """Convert a PlantUML mindmap string to Freemind/Freeplane XML."""
         lines = plantuml_string.strip().split("\n")
-        stripped_lines = [line.strip() for line in lines]
-        try:
-            start_idx = next(i for i, l in enumerate(stripped_lines) if l.startswith("@startmindmap"))
-            end_idx = next(i for i, l in enumerate(stripped_lines) if l.startswith("@endmindmap"))
-        except StopIteration:
-            raise ValueError("Input is not a valid PlantUML mindmap (missing @startmindmap or @endmindmap).")
-        if end_idx <= start_idx:
-            raise ValueError("Input is not a valid PlantUML mindmap (@endmindmap must come after @startmindmap).")
+        content_lines, title_text = self._extract_content(lines)
+
+        # Build a quick lookup: for each line in *content_lines* find its
+        # index inside the original *lines* list.  This is O(n) overall
+        # because both lists share the same ordering.
+        orig_indices = []
+        ci = 0
+        for line in lines:
+            if ci < len(content_lines) and line == content_lines[ci]:
+                orig_indices.append(ci)
+                ci += 1
 
         root = ET.Element("map")
         root.set("version", self.xml_version)
-        node_stack: List[ET.Element] = []
+        if title_text:
+            root.set("title", title_text)
+        # node_stack[0] is always the root element.
+        node_stack: List[ET.Element] = [root]
 
-        first_node_found = False
-
-        i = start_idx + 1
-        while i < end_idx:
-            line = lines[i]
+        idx = 0
+        while idx < len(content_lines):
+            line = content_lines[idx]
             stripped = line.strip()
 
+            # Skip blank lines and comments
             if not stripped or stripped.startswith("'"):
-                i += 1
+                idx += 1
                 continue
 
             parsed = self.parse_plantuml_line(line)
-            if parsed:
-                level, text, is_multiline_start = parsed
-                i_advanced = False
+            if not parsed:
+                idx += 1
+                continue
 
-                if is_multiline_start:
-                    if text.endswith(";"):
-                        # Single-line form: `:text;` — strip the semicolon
-                        text = text[:-1]
-                    else:
-                        # Multi-line form: read continuation lines until one ends with ;
-                        multiline_text = [text]
-                        i += 1
-                        while i < end_idx:
-                            next_line = lines[i].strip()
-                            if next_line.endswith(";"):
-                                multiline_text.append(next_line[:-1])
-                                i += 1
-                                break
-                            else:
-                                multiline_text.append(lines[i].strip())
-                                i += 1
-                        else:
-                            raise ValueError(
-                                "Unterminated multiline node: missing closing ';'."
-                            )
-                        text = "\n".join(multiline_text)
-                        # i is already positioned past the closing ; line
-                        i_advanced = True
+            level, text, is_multiline_start = parsed
 
-                if not first_node_found:
-                    root_node = self.create_xml_node(root, text)
-                    node_stack.append(root_node)
-                    first_node_found = True
-                    if not i_advanced:
-                        i += 1
-                    continue
-
-                while len(node_stack) >= level:
-                    node_stack.pop()
-
-                if not node_stack:
-                    new_node = self.create_xml_node(root, text)
-                    node_stack.append(new_node)
-                else:
-                    parent_node = node_stack[-1]
-                    new_node = self.create_xml_node(parent_node, text)
-                    node_stack.append(new_node)
-
-                if not i_advanced:
-                    i += 1
+            if is_multiline_start:
+                text, idx = self._collect_multiline(
+                    text, content_lines, idx, len(content_lines)
+                )
             else:
-                i += 1
+                idx += 1
+
+            # Pop back so that stack[-1] is the parent for *level*.
+            while len(node_stack) > level:
+                node_stack.pop()
+
+            parent = node_stack[-1]
+            new_node = self.create_xml_node(parent, text)
+            node_stack.append(new_node)
 
         return ET.tostring(root, encoding="unicode", method="xml")
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert between Freemind and PlantUML mindmaps.")
-    parser.add_argument("input_file", help="Path to the input file.")
-    parser.add_argument("-o", "--output_file", help="Path to the output file. If not provided, output will be printed to stdout.")
-    args = parser.parse_args()
 
-    input_path: str = args.input_file
-    output_path: Optional[str] = args.output_file
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Convert between Freemind and PlantUML mindmaps."
+    )
+    parser.add_argument("input_file", help="Path to the input file.")
+    parser.add_argument(
+        "-o", "--output_file",
+        help="Path to the output file. If not provided, output goes to stdout."
+    )
+    args = parser.parse_args()
 
     converter = MindMapConverter()
 
     try:
-        # Determine conversion direction
-        _, ext = os.path.splitext(input_path)
+        _, ext = os.path.splitext(args.input_file)
 
-        with open(input_path, "r", encoding="utf-8") as f:
+        with open(args.input_file, "r", encoding="utf-8") as f:
             content = f.read()
 
         if ext.lower() == ".mm":
             output_content = converter.freemind_to_plantuml(content)
         else:
-            # Assume PlantUML if not .mm, or explicit .puml/.plantuml
             output_content = converter.plantuml_to_freemind(content)
 
-        if output_path:
-            with open(output_path, "w", encoding="utf-8") as f:
+        if args.output_file:
+            with open(args.output_file, "w", encoding="utf-8") as f:
                 f.write(output_content)
         else:
             print(output_content)
 
     except FileNotFoundError:
-        print(f"Error: Input file not found at '{input_path}'", file=sys.stderr)
+        print(f"Error: Input file not found at '{args.input_file}'",
+              file=sys.stderr)
         sys.exit(1)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -235,6 +276,7 @@ def main() -> None:
     except Exception as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

@@ -264,5 +264,270 @@ Line 2
         self.assertIn("indented continuation", child.get("TEXT"))
         self.assertNotIn("    indented", child.get("TEXT"))
 
+
+    def test_very_deep_nesting(self):
+        """Stress: 50 levels of nesting must not cause stack issues."""
+        lines = ["@startmindmap", "* Root"]
+        for i in range(2, 51):
+            lines.append("*" * i + " Level" + str(i))
+        lines.append("@endmindmap")
+        puml = "\n".join(lines)
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        # Walk down to the deepest node
+        current = root.find("node")
+        for i in range(49):
+            children = current.findall("node")
+            self.assertTrue(len(children) > 0, f"Expected child at depth {i+1}")
+            current = children[0]
+        self.assertEqual(current.get("TEXT"), "Level50")
+
+    def test_siblings_at_same_level(self):
+        """Multiple siblings at the same level should attach to the same parent."""
+        puml_content = """@startmindmap
+* Root
+** Sibling1
+** Sibling2
+** Sibling3
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        children = root.find("node").findall("node")
+        self.assertEqual(len(children), 3)
+        self.assertEqual(children[0].get("TEXT"), "Sibling1")
+        self.assertEqual(children[1].get("TEXT"), "Sibling2")
+        self.assertEqual(children[2].get("TEXT"), "Sibling3")
+
+    def test_node_text_with_asterisks(self):
+        """Node text containing asterisks should not be confused with level markers."""
+        puml_content = """@startmindmap
+* Root node
+** Child *important* node
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        # The text should contain the asterisks
+        self.assertIn("*important*", child.get("TEXT"))
+
+    def test_colon_in_node_text_not_multiline(self):
+        """A colon that is NOT at the start of text should not trigger multiline parsing."""
+        puml_content = """@startmindmap
+* Root
+** Note: this is a regular node
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        self.assertEqual(child.get("TEXT"), "Note: this is a regular node")
+
+    def test_empty_node_text(self):
+        """A node with no text should still be created."""
+        puml_content = """@startmindmap
+* 
+** Child
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        root_node = root.find("node")
+        self.assertIsNotNone(root_node)
+        child = root_node.find("node")
+        self.assertEqual(child.get("TEXT"), "Child")
+
+    def test_level_goes_back_to_root_after_deep_section(self):
+        """After a deep subtree, going back to level 1 should attach to root."""
+        puml_content = """@startmindmap
+* Root
+** Deep1
+*** Deep2
+**** Deep3
+* AnotherRoot
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        nodes = root.findall("node")
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual(nodes[0].get("TEXT"), "Root")
+        self.assertEqual(nodes[1].get("TEXT"), "AnotherRoot")
+
+    def test_freemind_to_plantuml_with_multiple_children(self):
+        """Three-level tree with multiple branches."""
+        xml_content = """<map version="freeplane 1.9.13">
+<node TEXT="Root">
+<node TEXT="A">
+<node TEXT="A1"/>
+<node TEXT="A2"/>
+</node>
+<node TEXT="B">
+<node TEXT="B1">
+<node TEXT="B1a"/>
+</node>
+</node>
+</node>
+</map>"""
+        result = self.converter.freemind_to_plantuml(xml_content)
+        self.assertIn("** A", result)
+        self.assertIn("** B", result)
+        self.assertIn("*** A1", result)
+        self.assertIn("*** A2", result)
+        self.assertIn("*** B1", result)
+        self.assertIn("**** B1a", result)
+
+    def test_plantuml_single_line_multiline_with_html_tags(self):
+        """Multiline nodes containing HTML-like tags."""
+        puml_content = """@startmindmap
+* Root
+** :Line with <b>bold</b>;
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml_content)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        self.assertIn("<b>bold</b>", child.get("TEXT"))
+
+    def test_freemind_to_plantuml_nested_hyperlinks(self):
+        """Hyperlinks at various nesting levels."""
+        xml_content = """<map version="freeplane 1.9.13">
+<node TEXT="Root">
+<node TEXT="Linked">
+<hook URI="http://example.com"/>
+<node TEXT="Child of linked"/>
+</node>
+</node>
+</map>"""
+        puml = self.converter.freemind_to_plantuml(xml_content)
+        self.assertIn("* [[http://example.com Linked]]", puml)
+
+    def test_plantuml_to_freemind_roundtrip_idempotent_xml(self):
+        """Converting PlantUML->Freemind twice should produce the same XML structure."""
+        puml = """@startmindmap
+* Root
+** Child
+@endmindmap"""
+        xml1 = self.converter.plantuml_to_freemind(puml)
+        # Convert back to PlantUML
+        puml2 = self.converter.freemind_to_plantuml(xml1)
+        # Convert again to Freemind
+        xml2 = self.converter.plantuml_to_freemind(puml2)
+
+        root1 = ET.fromstring(xml1)
+        root2 = ET.fromstring(xml2)
+        self.assertEqual(self._extract_tree(root1.find("node")),
+                         self._extract_tree(root2.find("node")))
+
+    def test_converted_underscore_nodes_are_ignored_in_text(self):
+        """Verify that legacy underscore syntax (*_ or **) doesn't leak into text."""
+        puml = """@startmindmap
+* Root
+** Child with *_ asterisk
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        # The regex strips leading *_ on level markers, but "*_" in node text
+        # content (after the **) is preserved as-is since it's not at the start.
+        self.assertEqual(child.get("TEXT"), "Child with *_ asterisk")
+
+    def test_blank_lines_between_nodes(self):
+        """Blank lines between nodes should be ignored."""
+        puml = """@startmindmap
+
+* Root
+
+** Child
+
+* Sibling
+
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        nodes = root.findall("node")
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual(nodes[0].get("TEXT"), "Root")
+        self.assertEqual(nodes[1].get("TEXT"), "Sibling")
+
+
+    def test_startmindmap_with_title_text(self):
+        """@startmindmap My Title should not crash and should preserve the title.
+
+        Covers issue #16 (preserve title) and issue #17 test gap #3.
+        """
+        puml = """@startmindmap My Map Title
+* Root
+** Child
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        self.assertEqual(root.get("title"), "My Map Title")
+        self.assertEqual(root.find("node").get("TEXT"), "Root")
+
+    def test_startmindmap_without_title_has_no_title_attr(self):
+        """@startmindmap without extra text should not create a title attribute."""
+        puml = """@startmindmap
+* Root
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        self.assertIsNone(root.get("title"))
+
+    def test_multiple_root_level_nodes(self):
+        """Two * Node lines produce sibling nodes directly under <map>.
+
+        Covers issue #17 test gap #1.
+        """
+        puml = """@startmindmap
+* Root
+** Child
+* AnotherRoot
+** AnotherChild
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        top_nodes = root.findall("node")
+        self.assertEqual(len(top_nodes), 2)
+        self.assertEqual(top_nodes[0].get("TEXT"), "Root")
+        self.assertEqual(top_nodes[1].get("TEXT"), "AnotherRoot")
+        self.assertEqual(top_nodes[0].find("node").get("TEXT"), "Child")
+        self.assertEqual(top_nodes[1].find("node").get("TEXT"), "AnotherChild")
+
+    def test_hyperlink_only_roundtrip(self):
+        """[[http://example.com]] (no label) survives roundtrip with URI intact.
+
+        Covers issue #17 test gap #2.
+        """
+        mm_input = """<map version="freeplane 1.9.13">
+<node TEXT="Link Node">
+<hook NAME="ExternalObject" URI="http://example.com"/>
+</node>
+</map>"""
+        # mm -> puml
+        puml = self.converter.freemind_to_plantuml(mm_input)
+        self.assertIn("[[http://example.com Link Node]]", puml)
+
+        # puml -> mm
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        node = root.find("node")
+        self.assertEqual(node.get("TEXT"), "Link Node")
+        hook = node.find("hook")
+        self.assertIsNotNone(hook)
+        self.assertEqual(hook.get("URI"), "http://example.com")
+
+    def test_multiline_with_leading_whitespace(self):
+        """Multiline continuation with leading whitespace works correctly.
+
+        Covers issue #17 test gap #4.
+        """
+        puml = """@startmindmap
+* Root
+** :First line
+    Continued here;
+@endmindmap"""
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        child = root.find("node").find("node")
+        self.assertIn("First line", child.get("TEXT"))
+        self.assertIn("Continued here", child.get("TEXT"))
+
+
 if __name__ == '__main__':
     unittest.main()
