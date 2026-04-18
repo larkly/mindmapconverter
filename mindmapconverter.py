@@ -184,6 +184,9 @@ class MindMapConverter:
 
     def plantuml_to_freemind(self, plantuml_string: str) -> str:
         """Convert a PlantUML mindmap string to Freemind/Freeplane XML."""
+        # Normalize line endings (\r\n from Windows, \r from legacy Mac) to \n
+        # so split("\n") produces one logical line per source line.
+        plantuml_string = plantuml_string.replace("\r\n", "\n").replace("\r", "\n")
         lines = plantuml_string.strip().split("\n")
         stripped_lines = [line.strip() for line in lines]
         try:
@@ -316,6 +319,7 @@ class MindMapConverter:
         Raises:
             ValueError: If no H1 header is found in the content.
         """
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
         lines = content.split("\n")
 
         root = ET.Element("map")
