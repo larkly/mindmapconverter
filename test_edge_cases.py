@@ -281,8 +281,8 @@ class TestMindMapConverterEdgeCases(unittest.TestCase):
         self.assertIn(long_text, result)
 
     def test_many_siblings_at_same_level(self):
-        """100 siblings at the same level are handled."""
-        children = "\n".join(["* Child" + str(i) for i in range(100)])
+        """100 siblings at level 2 under a single root are handled."""
+        children = "\n".join(["** Child" + str(i) for i in range(100)])
         puml = f"@startmindmap\n* Root\n{children}\n@endmindmap"
         xml_output = self.converter.plantuml_to_freemind(puml)
         root = ET.fromstring(xml_output)
@@ -321,6 +321,30 @@ class TestMindMapConverterEdgeCases(unittest.TestCase):
         """PlantUML with mixed \\r\\n and \\n line endings is parsed correctly."""
         puml = "@startmindmap\r\n* Root\r\n** Child 1\r** Child 2\n@endmindmap"
         xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        root_node = root.find("node")
+        self.assertEqual(root_node.get("TEXT"), "Root")
+        children = root_node.findall("node")
+        self.assertEqual(len(children), 2)
+        self.assertEqual(children[0].get("TEXT"), "Child 1")
+        self.assertEqual(children[1].get("TEXT"), "Child 2")
+
+    def test_markdown_with_crlf_line_endings(self):
+        """Markdown with \\r\\n (Windows) line endings is parsed correctly."""
+        md = "# Root\r\n- Child 1\r\n- Child 2\r\n"
+        xml_output = self.converter.markdown_to_freemind(md)
+        root = ET.fromstring(xml_output)
+        root_node = root.find("node")
+        self.assertEqual(root_node.get("TEXT"), "Root")
+        children = root_node.findall("node")
+        self.assertEqual(len(children), 2)
+        self.assertEqual(children[0].get("TEXT"), "Child 1")
+        self.assertEqual(children[1].get("TEXT"), "Child 2")
+
+    def test_markdown_with_cr_only_line_endings(self):
+        """Markdown with \\r (old Mac) line endings is parsed correctly."""
+        md = "# Root\r- Child 1\r- Child 2\r"
+        xml_output = self.converter.markdown_to_freemind(md)
         root = ET.fromstring(xml_output)
         root_node = root.find("node")
         self.assertEqual(root_node.get("TEXT"), "Root")
