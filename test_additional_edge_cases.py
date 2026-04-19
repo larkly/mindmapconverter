@@ -497,6 +497,58 @@ class TestRoundtripEdgeCases(unittest.TestCase):
         self.assertIn("Line 1", roundtripped)
         self.assertIn("Line 2", roundtripped)
 
+    def test_hyperlink_only_node_mm_to_puml_to_mm_roundtrip(self):
+        """Issue #17: a [[http://example.com]] node (no label) survives a .mm → .puml → .mm roundtrip with URI intact."""
+        original_xml = (
+            '<map version="freeplane 1.9.13">'
+            '<node TEXT="http://example.com">'
+            '<hook NAME="ExternalObject" URI="http://example.com"/>'
+            '</node>'
+            '</map>'
+        )
+        puml = self.converter.freemind_to_plantuml(original_xml)
+        # Label-less link form should be produced
+        self.assertIn("[[http://example.com]]", puml)
+        # Must not include "[[http://example.com http://example.com]]" (duplicated label)
+        self.assertNotIn("[[http://example.com http://example.com]]", puml)
+
+        roundtripped_xml = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(roundtripped_xml)
+        node = root.find("node")
+        self.assertIsNotNone(node)
+        self.assertEqual(node.get("TEXT"), "http://example.com")
+        hook = node.find("hook")
+        self.assertIsNotNone(hook)
+        self.assertEqual(hook.get("URI"), "http://example.com")
+
+
+class TestStartmindmapTitleHandling(unittest.TestCase):
+    """Issue #17 item 3: @startmindmap with trailing title text must not crash the converter."""
+
+    def setUp(self):
+        self.converter = MindMapConverter()
+
+    def test_startmindmap_with_title_does_not_crash(self):
+        """`@startmindmap My Title` is accepted and body nodes are still parsed."""
+        puml = "@startmindmap My Title\n* Root\n** Child\n@endmindmap"
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        self.assertEqual(root.tag, "map")
+        root_node = root.find("node")
+        self.assertIsNotNone(root_node)
+        self.assertEqual(root_node.get("TEXT"), "Root")
+        child = root_node.find("node")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.get("TEXT"), "Child")
+
+    def test_startmindmap_with_title_no_body_produces_empty_map(self):
+        """`@startmindmap Title` followed immediately by `@endmindmap` yields a <map> with no nodes."""
+        puml = "@startmindmap Untitled\n@endmindmap"
+        xml_output = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml_output)
+        self.assertEqual(root.tag, "map")
+        self.assertEqual(len(root.findall("node")), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
