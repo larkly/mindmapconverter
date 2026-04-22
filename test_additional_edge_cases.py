@@ -498,5 +498,83 @@ class TestRoundtripEdgeCases(unittest.TestCase):
         self.assertIn("Line 2", roundtripped)
 
 
+class TestMultilineSemicolonHandling(unittest.TestCase):
+    """Regression tests for multi-line node text whose lines contain ';'.
+
+    The PlantUML multi-line form is ``:text;`` where ``;`` is the terminator.
+    When a Freemind node's TEXT contains a ``;`` at the end of a non-last
+    line, the naive serialisation ``:line1;\\nline2;`` is ambiguous with the
+    single-line form followed by orphan content. The parser resolves the
+    ambiguity by looking at the line following a trailing ``;``: if it is a
+    new node / comment / meta directive (or EOF) the ``;`` is a terminator,
+    otherwise it is internal to the node's text.
+    """
+
+    def setUp(self):
+        self.converter = MindMapConverter()
+
+    def test_roundtrip_preserves_semicolon_at_end_of_first_line(self):
+        """Freemind text ``'Line 1;\\nLine 2'`` must round-trip through PlantUML intact."""
+        xml = ('<map version="freeplane 1.9.13">'
+               '<node TEXT="Line 1;&#10;Line 2"/></map>')
+        puml = self.converter.freemind_to_plantuml(xml)
+        roundtripped = self.converter.plantuml_to_freemind(puml)
+        node = ET.fromstring(roundtripped).find("node")
+        self.assertEqual(node.get("TEXT"), "Line 1;\nLine 2")
+
+    def test_roundtrip_preserves_semicolons_on_all_intermediate_lines(self):
+        """Every intermediate line ending with ``;`` is preserved (only the last ``;`` is the terminator)."""
+        xml = ('<map version="freeplane 1.9.13">'
+               '<node TEXT="a;&#10;b;&#10;c"/></map>')
+        puml = self.converter.freemind_to_plantuml(xml)
+        roundtripped = self.converter.plantuml_to_freemind(puml)
+        node = ET.fromstring(roundtripped).find("node")
+        self.assertEqual(node.get("TEXT"), "a;\nb;\nc")
+
+    def test_single_line_colon_form_still_strips_terminator(self):
+        """``** :text;`` followed by a new node still parses as a single-line multiline."""
+        puml = "@startmindmap\n* Root\n** :single;\n* NewRoot\n@endmindmap"
+        xml = self.converter.plantuml_to_freemind(puml)
+        root = ET.fromstring(xml)
+        roots = root.findall("node")
+        self.assertEqual(len(roots), 2)
+        self.assertEqual(roots[0].get("TEXT"), "Root")
+        child = roots[0].find("node")
+        self.assertEqual(child.get("TEXT"), "single")
+        self.assertEqual(roots[1].get("TEXT"), "NewRoot")
+
+    def test_single_line_colon_form_before_endmindmap(self):
+        """``** :text;`` immediately followed by ``@endmindmap`` parses as single-line."""
+        puml = "@startmindmap\n* Root\n** :single;\n@endmindmap"
+        xml = self.converter.plantuml_to_freemind(puml)
+        child = ET.fromstring(xml).find("node").find("node")
+        self.assertEqual(child.get("TEXT"), "single")
+
+    def test_single_line_colon_form_before_comment(self):
+        """``** :text;`` followed by a comment parses as single-line."""
+        puml = "@startmindmap\n* Root\n** :single;\n' a comment\n@endmindmap"
+        xml = self.converter.plantuml_to_freemind(puml)
+        child = ET.fromstring(xml).find("node").find("node")
+        self.assertEqual(child.get("TEXT"), "single")
+
+    def test_multiline_with_internal_semicolon_parses_across_all_lines(self):
+        """A multi-line where continuation lines end with ``;`` keeps reading until a real terminator."""
+        puml = "@startmindmap\n* Root\n** :a;\nb;\nc;\n@endmindmap"
+        xml = self.converter.plantuml_to_freemind(puml)
+        child = ET.fromstring(xml).find("node").find("node")
+        self.assertEqual(child.get("TEXT"), "a;\nb;\nc")
+
+    def test_unterminated_multiline_with_internal_semicolon_still_raises(self):
+        """An ambiguous multi-line whose `;` lines are all non-terminators raises ValueError.
+
+        Without a blocking marker / EOF, every trailing ``;`` is absorbed as internal; so
+        the multi-line never terminates and the existing error is raised.
+        """
+        puml = "@startmindmap\n* Root\n** :a;\nb\n@endmindmap"
+        with self.assertRaises(ValueError) as ctx:
+            self.converter.plantuml_to_freemind(puml)
+        self.assertIn("Unterminated", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
