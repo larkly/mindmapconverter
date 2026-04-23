@@ -498,5 +498,99 @@ class TestRoundtripEdgeCases(unittest.TestCase):
         self.assertIn("Line 2", roundtripped)
 
 
+class TestMarkdownLinkBalancedParens(unittest.TestCase):
+    """Tests for Markdown links whose URLs contain balanced parentheses.
+
+    CommonMark allows unescaped parens inside a link URL as long as they are
+    balanced. The naive ``\\[([^\\]]+)\\]\\(([^)]+)\\)`` regex truncates the URL
+    at the first ``)`` and corrupts the node text, which broke common URLs such
+    as Wikipedia disambiguation links. These tests pin down the corrected
+    behaviour and guard against regressions.
+    """
+
+    def setUp(self):
+        self.converter = MindMapConverter()
+
+    def test_wikipedia_disambiguation_url_preserved(self):
+        """URL with a single (...) segment (Wikipedia-style) is preserved."""
+        md = (
+            "# Root\n"
+            "- [Python](https://en.wikipedia.org/wiki/Python_(programming_language))"
+        )
+        xml = self.converter.markdown_to_freemind(md)
+        root = ET.fromstring(xml)
+        python_node = root.find("node").find("node")
+
+        self.assertEqual(python_node.get("TEXT"), "Python")
+        hook = python_node.find("hook")
+        self.assertIsNotNone(hook)
+        self.assertEqual(
+            hook.get("URI"),
+            "https://en.wikipedia.org/wiki/Python_(programming_language)",
+        )
+
+    def test_url_with_parens_survives_md_roundtrip(self):
+        """MD → XML → MD → XML roundtrip preserves a paren-containing URL."""
+        md = (
+            "# Root\n"
+            "- [Python](https://en.wikipedia.org/wiki/Python_(programming_language))\n"
+            "- Plain"
+        )
+        xml = self.converter.markdown_to_freemind(md)
+        md_back = self.converter.freemind_to_markdown(xml)
+        xml_roundtrip = self.converter.markdown_to_freemind(md_back)
+        self.assertEqual(xml, xml_roundtrip)
+
+    def test_url_with_nested_balanced_parens(self):
+        """URL with nested balanced parens like /foo(bar(baz))/ parses correctly."""
+        md = "# Root\n- [label](http://example.com/foo(bar(baz))/path)"
+        xml = self.converter.markdown_to_freemind(md)
+        root = ET.fromstring(xml)
+        child = root.find("node").find("node")
+
+        self.assertEqual(child.get("TEXT"), "label")
+        self.assertEqual(
+            child.find("hook").get("URI"),
+            "http://example.com/foo(bar(baz))/path",
+        )
+
+    def test_plain_url_without_parens_still_works(self):
+        """Regression guard: simple URLs continue to parse correctly."""
+        md = "# Root\n- [docs](http://example.com/page)"
+        xml = self.converter.markdown_to_freemind(md)
+        root = ET.fromstring(xml)
+        child = root.find("node").find("node")
+
+        self.assertEqual(child.get("TEXT"), "docs")
+        self.assertEqual(
+            child.find("hook").get("URI"), "http://example.com/page"
+        )
+
+    def test_unbalanced_parens_leaves_link_as_text(self):
+        """Link with unbalanced parens (no matching ``)``) is not treated as a link."""
+        md = "# Root\n- [bad](http://example.com/unclosed"
+        xml = self.converter.markdown_to_freemind(md)
+        root = ET.fromstring(xml)
+        child = root.find("node").find("node")
+
+        # No hook should be created; the literal text is preserved verbatim.
+        self.assertIsNone(child.find("hook"))
+        self.assertEqual(child.get("TEXT"), "[bad](http://example.com/unclosed")
+
+    def test_find_markdown_link_returns_none_for_plain_text(self):
+        """``_find_markdown_link`` returns None when no link is present."""
+        self.assertIsNone(self.converter._find_markdown_link("just plain text"))
+
+    def test_find_markdown_link_returns_spans_and_parts(self):
+        """``_find_markdown_link`` returns correct spans, label, and url."""
+        text = "see [a](http://x.com/y) now"
+        result = self.converter._find_markdown_link(text)
+        self.assertIsNotNone(result)
+        start, end, label, url = result
+        self.assertEqual(text[start:end], "[a](http://x.com/y)")
+        self.assertEqual(label, "a")
+        self.assertEqual(url, "http://x.com/y")
+
+
 if __name__ == "__main__":
     unittest.main()
