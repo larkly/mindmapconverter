@@ -268,6 +268,41 @@ class MindMapConverter:
 
         return ET.tostring(root, encoding="unicode", method="xml")
 
+    @staticmethod
+    def _find_markdown_link(text: str) -> Optional[Tuple[int, int, str, str]]:
+        """Locate the first ``[label](url)`` link with balanced parens in the URL.
+
+        Standard Markdown allows unescaped parentheses inside a link URL as long
+        as they are balanced (CommonMark 6.3), which is common for e.g.
+        Wikipedia disambiguation URLs such as
+        ``https://en.wikipedia.org/wiki/Python_(programming_language)``. A naive
+        ``\\(([^)]+)\\)`` regex truncates those URLs at the first ``)``; this
+        helper walks the string and matches parens explicitly.
+
+        Returns ``(start, end, label, url)`` spans relative to ``text`` where
+        ``text[start:end]`` is the full ``[label](url)`` substring, or ``None``
+        if no well-formed link is found.
+        """
+        bracket_match = re.search(r"\[([^\]]+)\]\(", text)
+        if not bracket_match:
+            return None
+
+        label = bracket_match.group(1)
+        url_start = bracket_match.end()
+        depth = 1
+        pos = url_start
+        while pos < len(text):
+            ch = text[pos]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    url = text[url_start:pos]
+                    return bracket_match.start(), pos + 1, label, url
+            pos += 1
+        return None
+
     def _create_md_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
         """Create a Freemind XML node from Markdown text, extracting ``[text](url)`` links.
 
@@ -280,12 +315,11 @@ class MindMapConverter:
         """
         uri = None
 
-        # Extract markdown link [text](url)
-        link_match = re.search(r"\[([^\]]+)\]\(([^)]+)\)", text)
-        if link_match:
-            label = link_match.group(1)
-            url = link_match.group(2)
-            text = text[:link_match.start()] + label + text[link_match.end():]
+        # Extract markdown link [text](url); supports balanced parens in the URL.
+        link = self._find_markdown_link(text)
+        if link:
+            start, end, label, url = link
+            text = text[:start] + label + text[end:]
             uri = url
 
         # Convert <br> back to newlines
