@@ -270,37 +270,59 @@ class MindMapConverter:
 
     @staticmethod
     def _find_markdown_link(text: str) -> Optional[Tuple[int, int, str, str]]:
-        """Locate the first ``[label](url)`` link with balanced parens in the URL.
+        """Locate the first ``[label](url)`` link with balanced brackets in the
+        label and balanced parens in the URL.
 
-        Standard Markdown allows unescaped parentheses inside a link URL as long
-        as they are balanced (CommonMark 6.3), which is common for e.g.
-        Wikipedia disambiguation URLs such as
-        ``https://en.wikipedia.org/wiki/Python_(programming_language)``. A naive
-        ``\\(([^)]+)\\)`` regex truncates those URLs at the first ``)``; this
-        helper walks the string and matches parens explicitly.
+        CommonMark (6.3) allows unescaped parentheses inside a link URL as long
+        as they are balanced, which is common for e.g. Wikipedia disambiguation
+        URLs such as ``https://en.wikipedia.org/wiki/Python_(programming_language)``.
+        Similarly, link text may contain balanced brackets (for programming-style
+        identifiers like ``array[0]`` or footnote-like markers). A naive
+        ``\\[([^\\]]+)\\]\\(([^)]+)\\)`` regex truncates URLs at the first ``)``
+        and refuses any ``]`` inside the label; this helper walks the string
+        and matches both bracket types explicitly.
 
         Returns ``(start, end, label, url)`` spans relative to ``text`` where
         ``text[start:end]`` is the full ``[label](url)`` substring, or ``None``
         if no well-formed link is found.
         """
-        bracket_match = re.search(r"\[([^\]]+)\]\(", text)
-        if not bracket_match:
-            return None
-
-        label = bracket_match.group(1)
-        url_start = bracket_match.end()
-        depth = 1
-        pos = url_start
-        while pos < len(text):
-            ch = text[pos]
-            if ch == "(":
-                depth += 1
-            elif ch == ")":
-                depth -= 1
-                if depth == 0:
-                    url = text[url_start:pos]
-                    return bracket_match.start(), pos + 1, label, url
-            pos += 1
+        n = len(text)
+        i = 0
+        while i < n:
+            if text[i] != "[":
+                i += 1
+                continue
+            # Walk to the matching closing ']' with balanced nesting.
+            depth = 1
+            j = i + 1
+            while j < n:
+                c = text[j]
+                if c == "[":
+                    depth += 1
+                elif c == "]":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            # Unbalanced '[' or no '(' immediately after ']'; skip this start.
+            if depth != 0 or j + 1 >= n or text[j + 1] != "(":
+                i += 1
+                continue
+            label = text[i + 1:j]
+            url_start = j + 2
+            pdepth = 1
+            pos = url_start
+            while pos < n:
+                c = text[pos]
+                if c == "(":
+                    pdepth += 1
+                elif c == ")":
+                    pdepth -= 1
+                    if pdepth == 0:
+                        return i, pos + 1, label, text[url_start:pos]
+                pos += 1
+            # Unbalanced URL parens; advance past this candidate and keep looking.
+            i += 1
         return None
 
     def _create_md_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
