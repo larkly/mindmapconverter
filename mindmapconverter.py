@@ -152,6 +152,21 @@ class MindMapConverter:
             return level, text, is_multiline_start
         return None
 
+    def _is_multiline_terminator(self, lines: List[str], line_idx: int, end_idx: int) -> bool:
+        """Return True if the `;` at the end of ``lines[line_idx]`` terminates a multi-line node.
+
+        A trailing `;` is the real terminator when the next non-empty line is a new node
+        marker, a comment, a meta directive, or end-of-content. Otherwise the `;` is
+        internal to the node's text and multi-line collection should continue.
+        """
+        peek_i = line_idx + 1
+        while peek_i < end_idx and not lines[peek_i].strip():
+            peek_i += 1
+        if peek_i >= end_idx:
+            return True
+        stripped = lines[peek_i].strip()
+        return stripped.startswith("*") or stripped.startswith("'") or stripped.startswith("@")
+
     def create_xml_node(self, parent: ET.Element, text: str) -> ET.Element:
         """Create a Freemind XML node under parent, extracting any [[url label]] hyperlink."""
         # Extract the first [[url label]] or [[url]] hyperlink; only one URI per node is supported.
@@ -218,21 +233,22 @@ class MindMapConverter:
                 i_advanced = False
 
                 if is_multiline_start:
-                    if text.endswith(";"):
-                        # Single-line form: `:text;` — strip the semicolon
+                    # A trailing `;` is the multiline terminator only when followed by a
+                    # new node/comment/meta directive or EOF. Otherwise it is internal
+                    # to the node's text; this preserves `;\n` mid-text on round-trip.
+                    if text.endswith(";") and self._is_multiline_terminator(lines, i, end_idx):
                         text = text[:-1]
                     else:
-                        # Multi-line form: read continuation lines until one ends with ;
                         multiline_text = [text]
                         i += 1
                         while i < end_idx:
-                            next_line = lines[i].strip()
-                            if next_line.endswith(";"):
-                                multiline_text.append(next_line[:-1])
+                            current_line = lines[i].strip()
+                            if current_line.endswith(";") and self._is_multiline_terminator(lines, i, end_idx):
+                                multiline_text.append(current_line[:-1])
                                 i += 1
                                 break
                             else:
-                                multiline_text.append(lines[i].strip())
+                                multiline_text.append(current_line)
                                 i += 1
                         else:
                             raise ValueError(
