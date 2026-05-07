@@ -337,16 +337,31 @@ class TestMarkdownToFreemindEdgeCases(unittest.TestCase):
         self.assertEqual(root.find("node").get("TEXT"), "Root")
         self.assertEqual(len(root.find("node").findall("node")), 0)
 
-    def test_link_text_with_bracket_chars_not_extracted(self):
-        """Markdown link text containing ] chars: regex cannot match, text is preserved as-is."""
+    def test_link_text_with_balanced_bracket_chars_extracted(self):
+        """Markdown link text containing balanced [] is extracted per CommonMark."""
         md = "# Root\n- [A.B*C+?|()[] Test](http://example.com)"
         xml_output = self.converter.markdown_to_freemind(md)
         root = ET.fromstring(xml_output)
         node = root.find("node").find("node")
-        # The regex r'\[([^\]]+)\]\(([^)]+)\)' fails when the link text contains ']'
-        # So the entire bracket expression is kept as raw TEXT
-        self.assertEqual(node.get("TEXT"), "[A.B*C+?|()[] Test](http://example.com)")
-        self.assertIsNone(node.find("hook"))
+        # CommonMark 6.3 permits balanced brackets inside link text, so the
+        # outer [...] wraps a label that itself contains the balanced "[]" pair.
+        self.assertEqual(node.get("TEXT"), "A.B*C+?|()[] Test")
+        hook = node.find("hook")
+        self.assertIsNotNone(hook)
+        self.assertEqual(hook.get("URI"), "http://example.com")
+
+    def test_link_text_with_unbalanced_bracket_not_extracted(self):
+        """Unbalanced '[' in link text means the outer expression isn't a link."""
+        md = "# Root\n- [label with [ unbalanced](http://example.com)"
+        xml_output = self.converter.markdown_to_freemind(md)
+        root = ET.fromstring(xml_output)
+        node = root.find("node").find("node")
+        # The inner '[' is unbalanced against the outer ']', so the scanner
+        # falls through to the inner '[' and extracts that as the link start.
+        self.assertEqual(node.get("TEXT"), "[label with  unbalanced")
+        hook = node.find("hook")
+        self.assertIsNotNone(hook)
+        self.assertEqual(hook.get("URI"), "http://example.com")
 
     def test_multiline_text_with_br_in_markdown_input(self):
         """Multiple <br> tags in Markdown convert to actual newlines."""
@@ -642,6 +657,49 @@ class TestMarkdownLinkBalancedParens(unittest.TestCase):
         self.assertEqual(text[start:end], "[a](http://x.com/y)")
         self.assertEqual(label, "a")
         self.assertEqual(url, "http://x.com/y")
+
+
+class TestMarkdownLinkBalancedBrackets(unittest.TestCase):
+    """Tests for Markdown links whose label text contains balanced brackets.
+
+    CommonMark 6.3 permits balanced ``[]`` inside link text. This matters for
+    round-tripping .mm -> .md -> .mm whenever a node's TEXT contains ``[`` or
+    ``]`` (e.g. programming identifiers like ``array[0]``), since the naive
+    ``[^\\]]+`` regex would otherwise drop the link on the return trip.
+    """
+
+    def setUp(self):
+        self.converter = MindMapConverter()
+
+    def test_label_with_balanced_inner_brackets(self):
+        """Label with nested ``[0]`` is extracted with the full label intact."""
+        text = "[array[0]](http://x.com)"
+        result = self.converter._find_markdown_link(text)
+        self.assertIsNotNone(result)
+        start, end, label, url = result
+        self.assertEqual(text[start:end], "[array[0]](http://x.com)")
+        self.assertEqual(label, "array[0]")
+        self.assertEqual(url, "http://x.com")
+
+    def test_roundtrip_mm_to_md_to_mm_preserves_link_with_brackets(self):
+        """.mm -> .md -> .mm round-trip preserves both TEXT and hook URI when
+        the node text contains balanced brackets."""
+        mm_input = (
+            '<map version="freeplane 1.9.13">'
+            '<node TEXT="Root" FOLDED="false">'
+            '<node TEXT="array[0]" FOLDED="false">'
+            '<hook NAME="ExternalObject" URI="http://example.com/a"/>'
+            '</node></node></map>'
+        )
+        md = self.converter.freemind_to_markdown(mm_input)
+        mm_out = self.converter.markdown_to_freemind(md)
+        root = ET.fromstring(mm_out)
+        child = root.find("node").find("node")
+
+        self.assertEqual(child.get("TEXT"), "array[0]")
+        hook = child.find("hook")
+        self.assertIsNotNone(hook)
+        self.assertEqual(hook.get("URI"), "http://example.com/a")
 
 
 if __name__ == "__main__":
