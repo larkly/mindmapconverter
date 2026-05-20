@@ -11,7 +11,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.x'
     - name: Install dependencies
@@ -22,7 +22,25 @@ jobs:
       run: |
         rm -rf dist/
         python -m build
+    - name: Check version not already on PyPI
+      run: |
+        python -c "
+        import json, urllib.request, tomllib, sys, os
+        with open('pyproject.toml', 'rb') as f:
+            version = tomllib.load(f)['project']['version']
+        url = 'https://pypi.org/pypi/mindmapconverter/json'
+        data = json.loads(urllib.request.urlopen(url).read())
+        releases = data.get('releases', {})
+        if version in releases:
+            print(f'Version {version} already published on PyPI — skipping upload.')
+            with open(os.environ['GITHUB_OUTPUT'], 'w') as out:
+                out.write('skip_publish=true\n')
+        else:
+            print(f'Version {version} not found on PyPI — proceeding.')
+        "
+      id: version_check
     - name: Publish to PyPI
+      if: steps.version_check.outputs.skip_publish != 'true'
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         user: __token__
