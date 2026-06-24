@@ -11,7 +11,6 @@ This file contains tests for:
 import unittest
 import xml.etree.ElementTree as ET
 import os
-import sys
 import tempfile
 from io import StringIO
 from unittest.mock import patch

@@ -205,8 +205,8 @@ class MindMapConverter:
         lines = plantuml_string.strip().split("\n")
         stripped_lines = [line.strip() for line in lines]
         try:
-            start_idx = next(i for i, l in enumerate(stripped_lines) if l.startswith("@startmindmap"))
-            end_idx = next(i for i, l in enumerate(stripped_lines) if l.startswith("@endmindmap"))
+            start_idx = next(i for i, line in enumerate(stripped_lines) if line.startswith("@startmindmap"))
+            end_idx = next(i for i, line in enumerate(stripped_lines) if line.startswith("@endmindmap"))
         except StopIteration:
             raise ValueError("Input is not a valid PlantUML mindmap (missing @startmindmap or @endmindmap).")
         if end_idx <= start_idx:

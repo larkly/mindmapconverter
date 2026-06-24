@@ -17,5 +17,9 @@ jobs:
           python-version: '3.x'
       - name: Install package
         run: pip install -e .
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check .
       - name: Run tests
         run: python -m unittest discover -s . -p "test_*.py" -v
