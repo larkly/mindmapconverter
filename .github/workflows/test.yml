@@ -18,4 +18,4 @@ jobs:
       - name: Install package
         run: pip install -e .
       - name: Run tests
-        run: python -m pytest test_*.py -v
+        run: python -m unittest discover -s . -p "test_*.py" -v
